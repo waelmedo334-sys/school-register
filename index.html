@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#16324a" />
+<title>سجل رصد الغياب والدرجات</title>
+
+<!-- أيقونة التطبيق (يمكن استبدالها بأي صورة PNG مربعة 512x512) -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2218%22 fill=%22%2316324a%22/><text x=%2250%22 y=%2262%22 font-size=%2244%22 text-anchor=%22middle%22 fill=%22%23c98f3d%22 font-family=%22sans-serif%22>س</text></svg>" />
+
+<!-- React + ReactDOM -->
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<!-- Babel (لتحويل JSX داخل المتصفح) -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<!-- SheetJS (لتصدير Excel) -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+<!-- Tailwind (JIT عبر المتصفح) -->
+<script src="https://cdn.tailwindcss.com"></script>
+
+<style>
+  html, body, #root { height: 100%; }
+  body { margin: 0; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+
+    /* بدائل بسيطة لأيقونات lucide-react (بدون مكتبة خارجية) */
+    function makeIcon(char) {
+      return function Icon({ size, style, className }) {
+        return React.createElement(
+          "span",
+          {
+            className: className,
+            style: {
+              display: "inline-block",
+              lineHeight: 1,
+              fontSize: (size || 16) + "px",
+              ...style,
+            },
+          },
+          char
+        );
+      };
+    }
+    const SettingsIcon = makeIcon("\u2699\uFE0F");
+    const Users = makeIcon("\uD83D\uDC65");
+    const ClipboardList = makeIcon("\uD83D\uDCCB");
+    const BarChart3 = makeIcon("\uD83D\uDCCA");
+    const Plus = makeIcon("+");
+    const Trash2 = makeIcon("\uD83D\uDDD1\uFE0F");
+    const ChevronDown = makeIcon("\u25BE");
+    const ChevronLeft = makeIcon("\u2039");
+    const ChevronRight = makeIcon("\u203A");
+    const Pencil = makeIcon("\u270E");
+    const Check = makeIcon("\u2713");
+    const X = makeIcon("\u2715");
+    const AlertTriangle = makeIcon("\u26A0\uFE0F");
+    const Loader2 = makeIcon("\u23F3");
+    const FileDown = makeIcon("\u2B07\uFE0F");
+
+    const { useState, useEffect, useRef, useCallback } = React;
+
+
+/* ---------------------------------------------------------------------- */
+/* ثوابت وقيم افتراضية                                                    */
+/* ---------------------------------------------------------------------- */
+
+const DAY_SHORT = ["سبت", "أحد", "اثنين", "ثلاثاء", "أربعاء", "خميس"];
+const ATT_STATES = ["", "غ", "غع"]; // حاضر -> غياب بدون عذر -> غياب بعذر -> حاضر
+
+const defaultMeta = {
+  directorate: "إدارة التعليم",
+  department: "",
+  school: "",
+  grade: "الأول الابتدائي",
+  section: "",
+  startDate: "2026-09-12",
+  weeksCount: 18,
+  unexcusedDeduction: 1,
+  excusedDeduction: 0.5,
+};
+
+const emptyWeekRecord = () => ({
+  attendance: ["", "", "", "", "", ""],
+  homework: "",
+  notebook: "",
+  weeklyEval: "",
+});
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function addDays(dateStr, days) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function fmtDate(d) {
+  if (!d || isNaN(d.getTime())) return "--";
+  return `${d.getDate()}/${d.getMonth() + 1}`;
+}
+
+function round2(n) {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+/* ---------------------------------------------------------------------- */
+/* الأنماط (CSS مخصص فوق Tailwind)                                        */
+/* ---------------------------------------------------------------------- */
+
+const STYLE = `
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Markazi+Text:wght@600;700&display=swap');
+
+:root{
+  --ink:#16324a;
+  --ink-2:#20415f;
+  --paper:#f6f3ea;
+  --paper-2:#efe9d8;
+  --brass:#a9762c;
+  --brass-2:#c98f3d;
+  --line:#d8cfb4;
+  --good:#2f7a53;
+  --bad:#b5432f;
+  --warn:#c98f3d;
+}
+.app-root{
+  font-family:'Cairo', system-ui, sans-serif;
+  background:
+    repeating-linear-gradient(to bottom, transparent 0px, transparent 33px, var(--line) 34px),
+    var(--paper);
+  color:var(--ink);
+  min-height:100vh;
+}
+.app-header{
+  background: linear-gradient(180deg, var(--ink) 0%, var(--ink-2) 100%);
+  color: var(--paper);
+  border-bottom: 3px solid var(--brass);
+}
+.seal{
+  border: 2px dashed var(--brass-2);
+  border-radius:9999px;
+  color: var(--paper);
+  font-family:'Markazi Text', serif;
+}
+.card{
+  background: rgba(255,255,255,0.72);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(22,50,74,0.06);
+}
+.brass-btn{
+  background: linear-gradient(180deg, var(--brass-2), var(--brass));
+  color: white;
+  border-radius: 10px;
+  font-weight:700;
+}
+.ink-btn{
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 10px;
+  font-weight:700;
+}
+.tabbar{
+  background: var(--ink);
+  border-top: 3px solid var(--brass);
+}
+.tab-item{ color:#b9c8d6; }
+.tab-item.active{ color: var(--brass-2); }
+.att-chip{
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  border-radius:10px; padding:6px 2px; border:1px solid var(--line);
+  font-size:11px; font-weight:700; gap:2px; background:white;
+  transition: transform .1s ease;
+}
+.att-chip:active{ transform: scale(0.95); }
+.att-present{ background:#eaf5ee; border-color:#bfe2cc; color:var(--good); }
+.att-unexcused{ background:#fbeae6; border-color:#f0c3b7; color:var(--bad); }
+.att-excused{ background:#fbf1de; border-color:#f0dcac; color:var(--warn); }
+.field-label{ font-size:11px; color:#6b7c8c; font-weight:700; }
+.input-box{
+  border:1px solid var(--line); border-radius:8px; padding:6px 8px;
+  background:white; width:100%; font-family:'Cairo',sans-serif; font-size:14px;
+}
+.input-box:focus{ outline:2px solid var(--brass-2); outline-offset:1px; }
+.pill{
+  border-radius:9999px; padding:2px 10px; font-size:11px; font-weight:700;
+}
+`;
+
+/* ---------------------------------------------------------------------- */
+/* المكوّن الرئيسي                                                        */
+/* ---------------------------------------------------------------------- */
+
+function App() {
+  const [meta, setMeta] = useState(defaultMeta);
+  const [students, setStudents] = useState([]);
+  const [records, setRecords] = useState({}); // studentId -> {weeks:{idx:{...}}, examFirst, examSecond}
+  const [loaded, setLoaded] = useState(false);
+  const [tab, setTab] = useState("register");
+  const [selectedWeek, setSelectedWeek] = useState(0);
+  const [expandedStudent, setExpandedStudent] = useState(null);
+  const [newStudentName, setNewStudentName] = useState("");
+  const [editingStudentId, setEditingStudentId] = useState(null);
+  const [editingName, setEditingName] = useState("");
+  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved
+  const saveTimer = useRef(null);
+
+  /* ---------- تحميل البيانات من ذاكرة المتصفح (localStorage) ---------- */
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("school_register_app_data");
+      if (raw) {
+        const d = JSON.parse(raw);
+        setMeta({ ...defaultMeta, ...(d.meta || {}) });
+        setStudents(d.students || []);
+        setRecords(d.records || {});
+      }
+    } catch (e) {
+      // لا توجد بيانات محفوظة بعد
+    } finally {
+      setLoaded(true);
+    }
+  }, []);
+
+  /* ---------- حفظ البيانات في ذاكرة المتصفح (مع تأخير بسيط) ---------- */
+  useEffect(() => {
+    if (!loaded) return;
+    setSaveState("saving");
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          "school_register_app_data",
+          JSON.stringify({ meta, students, records })
+        );
+        setSaveState("saved");
+      } catch (e) {
+        setSaveState("idle");
+      }
+    }, 400);
+    return () => clearTimeout(saveTimer.current);
+  }, [meta, students, records, loaded]);
+
+  /* ---------- دوال مساعدة للحسابات ---------- */
+
+  const getWeekRecord = useCallback(
+    (studentId, weekIdx) => {
+      const sr = records[studentId];
+      return (sr && sr.weeks && sr.weeks[weekIdx]) || emptyWeekRecord();
+    },
+    [records]
+  );
+
+  function behaviorScore(attendance) {
+    const unexcused = attendance.filter((a) => a === "غ").length;
+    const excused = attendance.filter((a) => a === "غع").length;
+    const score =
+      5 -
+      unexcused * (parseFloat(meta.unexcusedDeduction) || 0) -
+      excused * (parseFloat(meta.excusedDeduction) || 0);
+    return Math.max(0, round2(score));
+  }
+
+  function weekTotal(studentId, weekIdx) {
+    const wr = getWeekRecord(studentId, weekIdx);
+    const hw = parseFloat(wr.homework) || 0;
+    const nb = parseFloat(wr.notebook) || 0;
+    const we = parseFloat(wr.weeklyEval) || 0;
+    return round2(hw + nb + we + behaviorScore(wr.attendance));
+  }
+
+  function updateAttendance(studentId, weekIdx, dayIdx, value) {
+    setRecords((prev) => {
+      const sr = prev[studentId] || { weeks: {}, examFirst: "", examSecond: "" };
+      const wr = (sr.weeks && sr.weeks[weekIdx]) || emptyWeekRecord();
+      const att = [...wr.attendance];
+      att[dayIdx] = value;
+      return {
+        ...prev,
+        [studentId]: {
+          ...sr,
+          weeks: { ...sr.weeks, [weekIdx]: { ...wr, attendance: att } },
+        },
+      };
+    });
+  }
+
+  function updateGrade(studentId, weekIdx, field, value) {
+    setRecords((prev) => {
+      const sr = prev[studentId] || { weeks: {}, examFirst: "", examSecond: "" };
+      const wr = (sr.weeks && sr.weeks[weekIdx]) || emptyWeekRecord();
+      return {
+        ...prev,
+        [studentId]: {
+          ...sr,
+          weeks: { ...sr.weeks, [weekIdx]: { ...wr, [field]: value } },
+        },
+      };
+    });
+  }
+
+  function updateExam(studentId, field, value) {
+    setRecords((prev) => {
+      const sr = prev[studentId] || { weeks: {}, examFirst: "", examSecond: "" };
+      return { ...prev, [studentId]: { ...sr, [field]: value } };
+    });
+  }
+
+  function termSummary(studentId) {
+    const sr = records[studentId] || { weeks: {}, examFirst: "", examSecond: "" };
+    let hwSum = 0,
+      nbSum = 0,
+      weSum = 0,
+      beSum = 0,
+      count = 0,
+      absU = 0,
+      absE = 0;
+    for (let w = 0; w < meta.weeksCount; w++) {
+      const wr = sr.weeks && sr.weeks[w];
+      if (!wr) continue;
+      const hasData =
+        wr.homework !== "" ||
+        wr.notebook !== "" ||
+        wr.weeklyEval !== "" ||
+        wr.attendance.some((a) => a !== "");
+      if (!hasData) continue;
+      count++;
+      hwSum += parseFloat(wr.homework) || 0;
+      nbSum += parseFloat(wr.notebook) || 0;
+      weSum += parseFloat(wr.weeklyEval) || 0;
+      beSum += behaviorScore(wr.attendance);
+      absU += wr.attendance.filter((a) => a === "غ").length;
+      absE += wr.attendance.filter((a) => a === "غع").length;
+    }
+    const avgHw = count ? hwSum / count : 0;
+    const avgNb = count ? nbSum / count : 0;
+    const avgWe = count ? weSum / count : 0;
+    const avgBe = count ? beSum / count : 0;
+    const termTotal = avgHw + avgNb + avgWe + avgBe;
+    const examVals = [sr.examFirst, sr.examSecond]
+      .filter((v) => v !== "" && v !== undefined && v !== null)
+      .map(Number);
+    const examAvg = examVals.length
+      ? examVals.reduce((a, b) => a + b, 0) / examVals.length
+      : 0;
+    return {
+      avgHw: round2(avgHw),
+      avgNb: round2(avgNb),
+      avgWe: round2(avgWe),
+      avgBe: round2(avgBe),
+      termTotal: round2(termTotal),
+      examAvg: round2(examAvg),
+      grandTotal: round2(termTotal + examAvg),
+      absU,
+      absE,
+      absTotal: absU + absE,
+      weeksFilled: count,
+    };
+  }
+
+  /* ---------- تصدير الدرجات إلى ملف إكسل ---------- */
+
+  function attLabel(state) {
+    if (state === "غ") return "غ";
+    if (state === "غع") return "غع";
+    return "حاضر";
+  }
+
+  function exportToExcel() {
+    if (students.length === 0) {
+      window.alert("لا يوجد طلاب لتصديرهم بعد.");
+      return;
+    }
+
+    // ورقة 1: التقرير الفصلي (ملخص لكل طالب)
+    const summaryRows = students.map((s, idx) => {
+      const sum = termSummary(s.id);
+      const sr = records[s.id] || {};
+      return {
+        م: idx + 1,
+        الاسم: s.name,
+        "متوسط واجب منزلي (5)": sum.avgHw,
+        "متوسط كراسة الحصة (5)": sum.avgNb,
+        "متوسط تقييم أسبوعي (10)": sum.avgWe,
+        "متوسط المواظبة والسلوك (5)": sum.avgBe,
+        "مجموع أعمال الفصل (25)": sum.termTotal,
+        "الاختبار الأول": sr.examFirst || "",
+        "الاختبار الثاني": sr.examSecond || "",
+        "متوسط الاختبارين": sum.examAvg,
+        "المجموع الكلي": sum.grandTotal,
+        "غياب بدون عذر": sum.absU,
+        "غياب بعذر": sum.absE,
+        "إجمالي أيام الغياب": sum.absTotal,
+        "الأسابيع المرصودة": `${sum.weeksFilled}/${meta.weeksCount}`,
+      };
+    });
+
+    // ورقة 2: التفاصيل الأسبوعية (حضور ودرجات كل أسبوع لكل طالب)
+    const detailRows = [];
+    students.forEach((s, idx) => {
+      for (let w = 0; w < meta.weeksCount; w++) {
+        const wr = getWeekRecord(s.id, w);
+        const hasData =
+          wr.homework !== "" ||
+          wr.notebook !== "" ||
+          wr.weeklyEval !== "" ||
+          wr.attendance.some((a) => a !== "");
+        if (!hasData) continue;
+        detailRows.push({
+          م: idx + 1,
+          الاسم: s.name,
+          الأسبوع: w + 1,
+          السبت: attLabel(wr.attendance[0]),
+          الأحد: attLabel(wr.attendance[1]),
+          الاثنين: attLabel(wr.attendance[2]),
+          الثلاثاء: attLabel(wr.attendance[3]),
+          الأربعاء: attLabel(wr.attendance[4]),
+          الخميس: attLabel(wr.attendance[5]),
+          "واجب منزلي": wr.homework,
+          "كراسة الحصة": wr.notebook,
+          "تقييم أسبوعي": wr.weeklyEval,
+          "المواظبة والسلوك": behaviorScore(wr.attendance),
+          "مجموع الأسبوع": weekTotal(s.id, w),
+        });
+      }
+    });
+
+    const wb = XLSX.utils.book_new();
+
+    const ws1 = XLSX.utils.json_to_sheet(summaryRows);
+    ws1["!cols"] = [
+      { wch: 5 },
+      { wch: 22 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 18 },
+      { wch: 16 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 14 },
+      { wch: 12 },
+      { wch: 14 },
+      { wch: 12 },
+      { wch: 16 },
+      { wch: 14 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws1, "التقرير الفصلي");
+
+    const ws2 = XLSX.utils.json_to_sheet(detailRows);
+    ws2["!cols"] = [
+      { wch: 5 },
+      { wch: 22 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 14 },
+      { wch: 14 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws2, "التفاصيل الأسبوعية");
+
+    const fileName = `${meta.school ? meta.school.trim() : "سجل الرصد"} - درجات وغياب.xlsx`;
+    XLSX.writeFile(wb, fileName);
+  }
+
+  /* ---------- إدارة الطلاب ---------- */
+
+  function addStudent() {
+    const name = newStudentName.trim();
+    if (!name) return;
+    setStudents((prev) => [...prev, { id: uid(), name }]);
+    setNewStudentName("");
+  }
+
+  function deleteStudent(id) {
+    if (!window.confirm("هل تريد حذف هذا الطالب وكل بياناته؟")) return;
+    setStudents((prev) => prev.filter((s) => s.id !== id));
+    setRecords((prev) => {
+      const cp = { ...prev };
+      delete cp[id];
+      return cp;
+    });
+  }
+
+  function startEdit(s) {
+    setEditingStudentId(s.id);
+    setEditingName(s.name);
+  }
+
+  function saveEdit(id) {
+    const name = editingName.trim();
+    if (name) {
+      setStudents((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, name } : s))
+      );
+    }
+    setEditingStudentId(null);
+  }
+
+  function resetAllData() {
+    if (
+      !window.confirm(
+        "سيتم حذف كل البيانات (الإعدادات والطلاب والدرجات) نهائياً. هل أنت متأكد؟"
+      )
+    )
+      return;
+    setMeta(defaultMeta);
+    setStudents([]);
+    setRecords({});
+  }
+
+  /* ---------------------------------------------------------------------- */
+
+  if (!loaded) {
+    return (
+      <div className="app-root flex items-center justify-center min-h-screen">
+        <style>{STYLE}</style>
+        <div className="flex flex-col items-center gap-3 text-[var(--ink)]">
+          <Loader2 className="animate-spin" size={28} />
+          <span className="font-bold">جارِ تحميل السجل...</span>
+        </div>
+      </div>
+    );
+  }
+
+  const weekStart = addDays(meta.startDate, selectedWeek * 7);
+  const weekDates = [0, 1, 2, 3, 4, 5].map(
+    (i) =>
+      new Date(
+        weekStart.getFullYear(),
+        weekStart.getMonth(),
+        weekStart.getDate() + i
+      )
+  );
+
+  return (
+    <div dir="rtl" className="app-root pb-20">
+      <style>{STYLE}</style>
+
+      {/* الرأس */}
+      <div className="app-header px-4 pt-5 pb-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[11px] opacity-80">
+              {meta.directorate || "إدارة التعليم"}
+            </div>
+            <div className="text-lg font-extrabold leading-tight">
+              {meta.school || "سجل رصد الغياب والدرجات"}
+            </div>
+            <div className="text-[12px] opacity-90 mt-0.5">
+              {meta.grade}
+              {meta.section ? ` — فصل ${meta.section}` : ""}
+            </div>
+          </div>
+          <div className="seal w-14 h-14 flex items-center justify-center text-[10px] text-center leading-tight shrink-0">
+            سجل
+            <br />
+            رصد
+          </div>
+        </div>
+        <div className="flex items-center justify-between mt-2">
+          <span className="text-[10px] opacity-70">
+            {saveState === "saving" ? "جارِ الحفظ..." : "تم الحفظ"}
+          </span>
+          <button
+            onClick={exportToExcel}
+            className="brass-btn flex items-center gap-1 px-3 py-1.5 text-[12px]"
+          >
+            <FileDown size={14} /> تصدير Excel
+          </button>
+        </div>
+      </div>
+
+      <div className="px-3 pt-3">
+        {tab === "settings" && (
+          <SettingsTab meta={meta} setMeta={setMeta} onReset={resetAllData} />
+        )}
+
+        {tab === "students" && (
+          <StudentsTab
+            students={students}
+            newStudentName={newStudentName}
+            setNewStudentName={setNewStudentName}
+            addStudent={addStudent}
+            deleteStudent={deleteStudent}
+            editingStudentId={editingStudentId}
+            editingName={editingName}
+            setEditingName={setEditingName}
+            startEdit={startEdit}
+            saveEdit={saveEdit}
+            cancelEdit={() => setEditingStudentId(null)}
+          />
+        )}
+
+        {tab === "register" && (
+          <RegisterTab
+            meta={meta}
+            students={students}
+            selectedWeek={selectedWeek}
+            setSelectedWeek={setSelectedWeek}
+            weekDates={weekDates}
+            expandedStudent={expandedStudent}
+            setExpandedStudent={setExpandedStudent}
+            getWeekRecord={getWeekRecord}
+            updateAttendance={updateAttendance}
+            updateGrade={updateGrade}
+            behaviorScore={behaviorScore}
+            weekTotal={weekTotal}
+          />
+        )}
+
+        {tab === "report" && (
+          <ReportTab
+            meta={meta}
+            students={students}
+            termSummary={termSummary}
+            updateExam={updateExam}
+            records={records}
+          />
+        )}
+      </div>
+
+      {/* شريط التبويبات السفلي */}
+      <div className="tabbar fixed bottom-0 left-0 right-0 flex justify-around py-2">
+        <TabButton
+          icon={<ClipboardList size={20} />}
+          label="الرصد"
+          active={tab === "register"}
+          onClick={() => setTab("register")}
+        />
+        <TabButton
+          icon={<BarChart3 size={20} />}
+          label="التقرير"
+          active={tab === "report"}
+          onClick={() => setTab("report")}
+        />
+        <TabButton
+          icon={<Users size={20} />}
+          label="الطلاب"
+          active={tab === "students"}
+          onClick={() => setTab("students")}
+        />
+        <TabButton
+          icon={<SettingsIcon size={20} />}
+          label="الإعدادات"
+          active={tab === "settings"}
+          onClick={() => setTab("settings")}
+        />
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* زر التبويب                                                             */
+/* ---------------------------------------------------------------------- */
+function TabButton({ icon, label, active, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`tab-item ${active ? "active" : ""} flex flex-col items-center gap-1 px-3`}
+    >
+      {icon}
+      <span className="text-[10px] font-bold">{label}</span>
+    </button>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* تبويب الإعدادات                                                        */
+/* ---------------------------------------------------------------------- */
+function SettingsTab({ meta, setMeta, onReset }) {
+  const set = (field) => (e) =>
+    setMeta((prev) => ({ ...prev, [field]: e.target.value }));
+  const setNum = (field) => (e) =>
+    setMeta((prev) => ({ ...prev, [field]: e.target.value === "" ? "" : Number(e.target.value) }));
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="card p-3">
+        <div className="font-extrabold mb-2 text-sm">بيانات المدرسة</div>
+        <div className="grid grid-cols-1 gap-2">
+          <Field label="الإدارة التعليمية">
+            <input className="input-box" value={meta.directorate} onChange={set("directorate")} />
+          </Field>
+          <Field label="اسم المدرسة">
+            <input className="input-box" value={meta.school} onChange={set("school")} placeholder="مدرسة ..." />
+          </Field>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="الصف">
+              <input className="input-box" value={meta.grade} onChange={set("grade")} />
+            </Field>
+            <Field label="الفصل">
+              <input className="input-box" value={meta.section} onChange={set("section")} placeholder="مثال: 1" />
+            </Field>
+          </div>
+        </div>
+      </div>
+
+      <div className="card p-3">
+        <div className="font-extrabold mb-2 text-sm">الفصل الدراسي</div>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="تاريخ بداية الأسبوع الأول">
+            <input
+              type="date"
+              className="input-box"
+              value={meta.startDate}
+              onChange={set("startDate")}
+            />
+          </Field>
+          <Field label="عدد الأسابيع">
+            <input
+              type="number"
+              min="1"
+              max="30"
+              className="input-box"
+              value={meta.weeksCount}
+              onChange={setNum("weeksCount")}
+            />
+          </Field>
+        </div>
+      </div>
+
+      <div className="card p-3">
+        <div className="font-extrabold mb-2 text-sm">
+          إعدادات درجة المواظبة والسلوك (من 5 أسبوعياً)
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="خصم كل يوم غياب بدون عذر">
+            <input
+              type="number"
+              step="0.5"
+              min="0"
+              className="input-box"
+              value={meta.unexcusedDeduction}
+              onChange={setNum("unexcusedDeduction")}
+            />
+          </Field>
+          <Field label="خصم كل يوم غياب بعذر">
+            <input
+              type="number"
+              step="0.5"
+              min="0"
+              className="input-box"
+              value={meta.excusedDeduction}
+              onChange={setNum("excusedDeduction")}
+            />
+          </Field>
+        </div>
+        <p className="text-[11px] text-[#6b7c8c] mt-2 leading-relaxed">
+          الدرجة = 5 − (أيام الغياب بدون عذر × قيمة الخصم) − (أيام الغياب بعذر
+          × قيمة الخصم)، بحد أدنى صفر. تُحسب تلقائياً من صفحة الرصد.
+        </p>
+      </div>
+
+      <div className="card p-3 border-[var(--bad)]">
+        <div className="flex items-center gap-2 font-extrabold text-sm text-[var(--bad)]">
+          <AlertTriangle size={16} /> منطقة الخطر
+        </div>
+        <p className="text-[11px] text-[#6b7c8c] my-2">
+          حذف جميع البيانات المحفوظة (الإعدادات، الطلاب، الغياب، الدرجات) نهائياً.
+        </p>
+        <button
+          onClick={onReset}
+          className="w-full py-2 rounded-lg font-bold text-white"
+          style={{ background: "var(--bad)" }}
+        >
+          حذف كل البيانات
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="field-label">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* تبويب الطلاب                                                           */
+/* ---------------------------------------------------------------------- */
+function StudentsTab({
+  students,
+  newStudentName,
+  setNewStudentName,
+  addStudent,
+  deleteStudent,
+  editingStudentId,
+  editingName,
+  setEditingName,
+  startEdit,
+  saveEdit,
+  cancelEdit,
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="card p-3">
+        <div className="font-extrabold mb-2 text-sm">إضافة طالب</div>
+        <div className="flex gap-2">
+          <input
+            className="input-box flex-1"
+            placeholder="اسم الطالب"
+            value={newStudentName}
+            onChange={(e) => setNewStudentName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addStudent()}
+          />
+          <button onClick={addStudent} className="brass-btn px-3 flex items-center gap-1">
+            <Plus size={16} /> إضافة
+          </button>
+        </div>
+      </div>
+
+      <div className="card p-2">
+        <div className="font-extrabold text-sm px-2 py-1">
+          قائمة الطلاب ({students.length})
+        </div>
+        {students.length === 0 && (
+          <div className="text-center text-[#6b7c8c] text-sm py-6">
+            لا يوجد طلاب بعد. أضف أول طالب من الأعلى.
+          </div>
+        )}
+        <div className="flex flex-col divide-y" style={{ borderColor: "var(--line)" }}>
+          {students.map((s, idx) => (
+            <div key={s.id} className="flex items-center gap-2 py-2 px-2">
+              <span className="w-6 text-center text-[12px] text-[#6b7c8c] font-bold">
+                {idx + 1}
+              </span>
+              {editingStudentId === s.id ? (
+                <>
+                  <input
+                    className="input-box flex-1"
+                    value={editingName}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    autoFocus
+                  />
+                  <button onClick={() => saveEdit(s.id)} className="text-[var(--good)]">
+                    <Check size={18} />
+                  </button>
+                  <button onClick={cancelEdit} className="text-[var(--bad)]">
+                    <X size={18} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="flex-1 text-sm font-semibold">{s.name}</span>
+                  <button onClick={() => startEdit(s)} className="text-[var(--ink-2)] p-1">
+                    <Pencil size={16} />
+                  </button>
+                  <button onClick={() => deleteStudent(s.id)} className="text-[var(--bad)] p-1">
+                    <Trash2 size={16} />
+                  </button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* تبويب الرصد الأسبوعي                                                   */
+/* ---------------------------------------------------------------------- */
+function RegisterTab({
+  meta,
+  students,
+  selectedWeek,
+  setSelectedWeek,
+  weekDates,
+  expandedStudent,
+  setExpandedStudent,
+  getWeekRecord,
+  updateAttendance,
+  updateGrade,
+  behaviorScore,
+  weekTotal,
+}) {
+  const weeksOptions = Array.from({ length: meta.weeksCount }, (_, i) => i);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="card p-3">
+        <div className="flex items-center justify-between gap-2">
+          <button
+            onClick={() => setSelectedWeek((w) => Math.max(0, w - 1))}
+            className="ink-btn p-2"
+            disabled={selectedWeek === 0}
+          >
+            <ChevronRight size={16} />
+          </button>
+          <div className="flex-1 text-center">
+            <select
+              className="input-box text-center font-bold"
+              value={selectedWeek}
+              onChange={(e) => setSelectedWeek(Number(e.target.value))}
+            >
+              {weeksOptions.map((w) => (
+                <option key={w} value={w}>
+                  الأسبوع {w + 1}
+                </option>
+              ))}
+            </select>
+            <div className="text-[11px] text-[#6b7c8c] mt-1">
+              {fmtDate(weekDates[0])} — {fmtDate(weekDates[5])}
+            </div>
+          </div>
+          <button
+            onClick={() =>
+              setSelectedWeek((w) => Math.min(meta.weeksCount - 1, w + 1))
+            }
+            className="ink-btn p-2"
+            disabled={selectedWeek === meta.weeksCount - 1}
+          >
+            <ChevronLeft size={16} />
+          </button>
+        </div>
+      </div>
+
+      {students.length === 0 && (
+        <div className="card p-6 text-center text-[#6b7c8c] text-sm">
+          أضف طلاباً أولاً من تبويب "الطلاب" لبدء الرصد.
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2">
+        {students.map((s, idx) => {
+          const isOpen = expandedStudent === s.id;
+          const wr = getWeekRecord(s.id, selectedWeek);
+          const total = weekTotal(s.id, selectedWeek);
+          return (
+            <div key={s.id} className="card overflow-hidden">
+              <button
+                className="w-full flex items-center gap-2 p-3"
+                onClick={() => setExpandedStudent(isOpen ? null : s.id)}
+              >
+                <span className="w-6 text-center text-[12px] text-[#6b7c8c] font-bold">
+                  {idx + 1}
+                </span>
+                <span className="flex-1 text-right text-sm font-bold">{s.name}</span>
+                <span
+                  className="pill"
+                  style={{
+                    background: "var(--paper-2)",
+                    color: "var(--ink)",
+                    border: "1px solid var(--line)",
+                  }}
+                >
+                  {total} / 25
+                </span>
+                <ChevronDown
+                  size={18}
+                  style={{
+                    transform: isOpen ? "rotate(180deg)" : "none",
+                    transition: "transform .15s",
+                  }}
+                />
+              </button>
+
+              {isOpen && (
+                <div className="px-3 pb-3">
+                  <div className="field-label mb-1">الحضور والغياب (اضغط لتغيير الحالة)</div>
+                  <div className="grid grid-cols-6 gap-1 mb-3">
+                    {DAY_SHORT.map((day, i) => {
+                      const state = wr.attendance[i];
+                      const cls =
+                        state === "غ"
+                          ? "att-unexcused"
+                          : state === "غع"
+                          ? "att-excused"
+                          : "att-present";
+                      return (
+                        <button
+                          key={i}
+                          className={`att-chip ${cls}`}
+                          onClick={() => {
+                            const cur = ATT_STATES.indexOf(state);
+                            const next = ATT_STATES[(cur + 1) % ATT_STATES.length];
+                            updateAttendance(s.id, selectedWeek, i, next);
+                          }}
+                        >
+                          <span>{day}</span>
+                          <span>{state === "" ? "✓" : state === "غ" ? "غ" : "عذر"}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 mb-2">
+                    <Field label="واجب منزلي (5)">
+                      <input
+                        type="number"
+                        min="0"
+                        max="5"
+                        step="0.5"
+                        className="input-box"
+                        value={wr.homework}
+                        onChange={(e) =>
+                          updateGrade(s.id, selectedWeek, "homework", e.target.value)
+                        }
+                      />
+                    </Field>
+                    <Field label="كراسة الحصة (5)">
+                      <input
+                        type="number"
+                        min="0"
+                        max="5"
+                        step="0.5"
+                        className="input-box"
+                        value={wr.notebook}
+                        onChange={(e) =>
+                          updateGrade(s.id, selectedWeek, "notebook", e.target.value)
+                        }
+                      />
+                    </Field>
+                    <Field label="تقييم أسبوعي (10)">
+                      <input
+                        type="number"
+                        min="0"
+                        max="10"
+                        step="0.5"
+                        className="input-box"
+                        value={wr.weeklyEval}
+                        onChange={(e) =>
+                          updateGrade(s.id, selectedWeek, "weeklyEval", e.target.value)
+                        }
+                      />
+                    </Field>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[12px] px-1">
+                    <span className="text-[#6b7c8c]">
+                      المواظبة والسلوك (تلقائي):{" "}
+                      <b style={{ color: "var(--ink)" }}>
+                        {behaviorScore(wr.attendance)} / 5
+                      </b>
+                    </span>
+                    <span className="font-extrabold">المجموع: {total} / 25</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* تبويب التقرير الفصلي                                                   */
+/* ---------------------------------------------------------------------- */
+function ReportTab({ meta, students, termSummary, updateExam, records }) {
+  const summaries = students.map((s) => ({ s, sum: termSummary(s.id) }));
+  const activeCount = summaries.filter((x) => x.sum.weeksFilled > 0).length;
+  const classAvg =
+    activeCount > 0
+      ? round2(
+          summaries.reduce((acc, x) => acc + x.sum.grandTotal, 0) / activeCount
+        )
+      : 0;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="card p-3 flex items-center justify-between">
+        <div>
+          <div className="field-label">متوسط الفصل العام</div>
+          <div className="text-xl font-extrabold">{classAvg}</div>
+        </div>
+        <div className="text-[12px] text-[#6b7c8c] text-left">
+          عدد الطلاب: {students.length}
+          <br />
+          لديهم بيانات: {activeCount}
+        </div>
+      </div>
+
+      {students.length === 0 && (
+        <div className="card p-6 text-center text-[#6b7c8c] text-sm">
+          لا يوجد طلاب بعد لعرض تقاريرهم.
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2">
+        {summaries.map(({ s, sum }, idx) => {
+          const sr = records[s.id] || { examFirst: "", examSecond: "" };
+          return (
+            <div key={s.id} className="card p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-6 text-center text-[12px] text-[#6b7c8c] font-bold">
+                  {idx + 1}
+                </span>
+                <span className="flex-1 font-bold text-sm">{s.name}</span>
+                <span
+                  className="pill"
+                  style={{
+                    background: "var(--ink)",
+                    color: "var(--paper)",
+                  }}
+                >
+                  المجموع الكلي: {sum.grandTotal}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-4 gap-1 text-center mb-2">
+                <MiniStat label="واجب" value={sum.avgHw} />
+                <MiniStat label="كراسة" value={sum.avgNb} />
+                <MiniStat label="تقييم" value={sum.avgWe} />
+                <MiniStat label="سلوك" value={sum.avgBe} />
+              </div>
+
+              <div className="flex items-center justify-between text-[12px] mb-2 px-1">
+                <span>
+                  متوسط أعمال الفصل: <b>{sum.termTotal}</b> / 25
+                </span>
+                <span>
+                  الأسابيع المرصودة: {sum.weeksFilled}/{meta.weeksCount}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 mb-2">
+                <Field label="الاختبار الأول">
+                  <input
+                    type="number"
+                    className="input-box"
+                    value={sr.examFirst || ""}
+                    onChange={(e) => updateExam(s.id, "examFirst", e.target.value)}
+                  />
+                </Field>
+                <Field label="الاختبار الثاني">
+                  <input
+                    type="number"
+                    className="input-box"
+                    value={sr.examSecond || ""}
+                    onChange={(e) => updateExam(s.id, "examSecond", e.target.value)}
+                  />
+                </Field>
+                <Field label="متوسط الاختبارين">
+                  <div className="input-box text-center font-bold bg-[#f6f3ea]">
+                    {sum.examAvg}
+                  </div>
+                </Field>
+              </div>
+
+              <div className="flex items-center justify-between text-[12px] px-1 pt-1 border-t" style={{ borderColor: "var(--line)" }}>
+                <span style={{ color: "var(--bad)" }}>
+                  غياب بدون عذر: <b>{sum.absU}</b>
+                </span>
+                <span style={{ color: "var(--warn)" }}>
+                  غياب بعذر: <b>{sum.absE}</b>
+                </span>
+                <span>
+                  إجمالي الغياب: <b>{sum.absTotal}</b>
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function MiniStat({ label, value }) {
+  return (
+    <div className="rounded-lg py-1.5" style={{ background: "var(--paper-2)" }}>
+      <div className="text-[10px] text-[#6b7c8c] font-bold">{label}</div>
+      <div className="text-sm font-extrabold">{value}</div>
+    </div>
+  );
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(App));
+</script>
+</body>
+</html>
