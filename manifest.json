@@ -1,0 +1,17 @@
+{
+  "background_color": "#6354c7",
+  "dir": "ltr",
+  "display": "standalone",
+  "name": "سجل رصد الغياب والدرجات",
+  "orientation": "portrait",
+  "scope": "/",
+  "short_name": "سجل الرصد",
+  "start_url": "/",
+  "theme_color": "#e6cece",
+  "id": "com.[MrWael].register",
+  "description": "تسجيل درجات التقييمات الأسبوعية و الشهرية و الغياب و السلوك و كراسة الحصة و الواجب و استخراج المتوسطات اتوماتيك",
+  "lang": "ar",
+  "categories": [
+    "education"
+  ]
+}
